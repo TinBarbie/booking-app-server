@@ -6,8 +6,8 @@ import authRoute from './routes/auth.js';
 import hotelsRoute from './routes/hotels.js';
 import roomsRoute from './routes/rooms.js';
 import usersRoute from './routes/users.js';
-import otpGenerator from 'otp-generator';
 import redis from "redis";
+// import twilio from 'twilio';
 
 const app = express();
 dotenv.config()
@@ -42,13 +42,9 @@ redisClient.on('connect', function (err) {
 
 await redisClient.connect();
 
-// const sharedSecret = 'YOUR_SHARED_SECRET';
-// const otp = otpGenerator.generateOTP({
-//     secret: sharedSecret,
-//     digits: 6,
-//     algorithm: 'sha256',
-//     epoch: Date.now(),
-// });
+// const accountSid = process.env.TWILIO_ACCOUNT_SID; // Your Twilio account SID
+// const authToken = process.env.TWILIO_AUTH_TOKEN; // Your Twilio auth token
+// export const twilioClient = new twilio(accountSid, authToken);
 
 //middlewares
 

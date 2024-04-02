@@ -4,8 +4,40 @@ import { createError } from "../utils/error.js";
 import jwt from "jsonwebtoken";
 import otpGenerator from 'otp-generator';
 import { redisClient } from "../index.js";
+import emailjs from '@emailjs/nodejs';
+import dotenv from "dotenv";
+dotenv.config()
 
 var refreshTokens = {};
+
+function sendOTP(username, email, otp) {
+    // console.log(phoneNumber);
+    // twilioClient.messages.create({
+    //     body: `Your OTP is: ${otp}`,
+    //     to: "0336639944",  // User's phone number
+    //     from: '+1 954 621 1427' // Your Twilio phone number
+    // })
+    //     .then((message) => console.log(message.sid)); 
+    const templateParams = {
+        username,
+        email,
+        otp,
+    };
+
+    emailjs
+        .send(process.env.EMAILJS_SERVICE_ID, process.env.EMAILJS_TEMPLATE_ID, templateParams, {
+            publicKey: process.env.EMAILJS_PUBLIC_KEY,
+            privateKey: process.env.EMAILJS_PRIVATE_KEY
+        })
+        .then(
+            (response) => {
+                console.log('SUCCESS!', response.status, response.text);
+            },
+            (err) => {
+                console.log('FAILED...', err);
+            },
+        );
+}
 
 export const register = async (req, res, next) => {
     const { username, email, password, phoneNumber } = req.body;
@@ -42,47 +74,46 @@ export const register = async (req, res, next) => {
             password: hashedPassword
         })
 
-        redisClient.set(phoneNumber, otp);
+        // redisClient.set(email, otp);
 
         const { password, ...responseUser } = user._doc;
         // return save result as a response
         user.save()
             .then(result => res.status(201).send({
                 msg: "User Register Successfully",
-                OTP: otp, User: responseUser
+                // OTP: otp, 
+                User: responseUser
             }))
             .catch(error => res.status(500).send({ error }))
     })
 }
 
-export async function verifyUser(req, res, next) {
-    const { username, phoneNumber, otp } = req.body;
+export async function verifyOTP(req, res, next) {
+    const { username, otp } = req.body;
 
-    // check the user existance
-    let exist = await User.findOne({ username: username });
-    if (!exist) return res.status(404).send({ error: "Can't find User!" });
+    // Retrieve the user
+    const user = await User.findOne({ username: username });
+    if (!user) return res.status(404).send({ error: "Can't find User!" });
 
-    let existPhoneNumber = await User.findOne({ phoneNumber });
-    if (!existPhoneNumber) {
-        return res.status(400).send("Can't find Phone number!")
-    }
-
-    // Retrieve the stored OTP from Redis, using the user's email as the key
-    const storedOTP = await redisClient.get(phoneNumber);
-
+    // Retrieve the stored OTP from Redis
+    const storedOTP = await redisClient.get(user.email);
     if (storedOTP === otp) {
         // If the OTPs match, delete the stored OTP from Redis
-        redisClient.del(phoneNumber);
+        redisClient.del(user.phoneNumber);
 
-        // Update the user's isVerified property in the database
-        await User.findOneAndUpdate({ username }, { isVerified: true });
+        // Generate JWT tokens
+        const token = jwt.sign({ id: user.id, isAdmin: user.isAdmin }, process.env.JWT, { expiresIn: process.env.ACCESS_TOKEN_LIFE })
+        const refreshToken = jwt.sign({ id: user.id, isAdmin: user.isAdmin }, process.env.JWT, { expiresIn: process.env.REFRESH_TOKEN_LIFE })
 
-        // Send a success response
-        return res.status(200).json({
-            status: 'OTP verified successfully',
-            username,
-            isVerified: true
-        });
+        const response = {
+            "status": "Logged in",
+            "accessToken": token,
+            "refreshToken": refreshToken,
+        }
+
+        refreshTokens[refreshToken] = response
+
+        return res.json(response)
     } else {
         // If the OTPs do not match, send an error response
         return res.status(400).send('Invalid OTP');
@@ -94,23 +125,29 @@ export const login = async (req, res, next) => {
     if (!username || !password) {
         return next(createError(400, "Username and password are required!"))
     }
-    const user = await User.findOne({ username: req.body.username })
+    const user = await User.findOne({ username: username })
     if (!user) return next(createError(404, "User not found!"))
-    const isCorrectPassword = await bcrypt.compare(req.body.password, user.password)
+    const isCorrectPassword = await bcrypt.compare(password, user.password)
     if (!isCorrectPassword) return next(createError(400, "Wrong password"))
 
-    const token = jwt.sign({ id: user.id, isAdmin: user.isAdmin }, process.env.JWT, { expiresIn: process.env.ACCESS_TOKEN_LIFE })
-    const refreshToken = jwt.sign({ id: user.id, isAdmin: user.isAdmin }, process.env.JWT, { expiresIn: process.env.REFRESH_TOKEN_LIFE })
+    // Generate OTP
+    const otp = otpGenerator.generate(4, {
+        lowerCaseAlphabets: false,
+        upperCaseAlphabets: false,
+        specialChars: false,
+    });
 
-    const response = {
-        "status": "Logged in",
-        "accessToken": token,
-        "refreshToken": refreshToken,
-    }
+    // Store OTP in Redis
+    redisClient.set(user.email, otp);
 
-    refreshTokens[refreshToken] = response
+    // Send OTP to user
+    // You need to implement the sendOTP function to send the OTP to the user's phone number
+    sendOTP(username, user.email, otp);
 
-    return res.json(response)
+    return res.json({
+        "status": "OTP sent",
+        "username": username,
+    })
 }
 
 export const regenAccessToken = async (req, res, next) => {
